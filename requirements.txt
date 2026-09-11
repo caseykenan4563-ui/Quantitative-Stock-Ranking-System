@@ -1,0 +1,8 @@
+numpy
+openpyxl
+pandas
+python-dateutil
+pytz
+requests
+xlsxwriter
+yfinance
