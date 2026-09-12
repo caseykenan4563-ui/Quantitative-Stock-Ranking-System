@@ -979,6 +979,21 @@ def daily_return_and_drift(
     return float(total_growth - 1.0)
 
 
+def price_return_row(price_wide: pd.DataFrame, pos: int) -> pd.Series:
+    if pos <= 0:
+        return pd.Series(dtype="float64")
+    return (price_wide.iloc[pos] / price_wide.iloc[pos - 1] - 1.0).replace([np.inf, -np.inf], np.nan)
+
+
+def finite_asset_return(asset_returns: pd.Series, ticker: str) -> float:
+    value = asset_returns.get(ticker, np.nan)
+    return float(value) if pd.notna(value) and np.isfinite(value) else 0.0
+
+
+def compound_price_return_and_cost(price_return: float, total_cost: float) -> float:
+    return float((1.0 + price_return) * (1.0 - total_cost) - 1.0)
+
+
 def rebalance_portfolio(
     state: PortfolioState,
     target_weights: dict[str, float],
@@ -1880,6 +1895,15 @@ def simulate_walk_forward_dynamic_portfolio(
     rebalance_rows: list[dict] = []
 
     for idx, (anchor, trade_date, fold, selected) in enumerate(live_schedule):
+        current_pos = int(price_wide.index.get_loc(trade_date))
+        rebalance_returns = price_return_row(price_wide, current_pos) if daily_rows else pd.Series(dtype="float64")
+        strategy_price_return = daily_return_and_drift(strategy, rebalance_returns)
+        universe_price_return = daily_return_and_drift(universe, rebalance_returns)
+        qqq_return = finite_asset_return(rebalance_returns, "QQQ") if daily_rows else 0.0
+        xlk_return = finite_asset_return(rebalance_returns, "XLK") if daily_rows else 0.0
+        qqq_equity *= 1.0 + qqq_return
+        xlk_equity *= 1.0 + xlk_return
+
         selected_config_id = str(selected["Selected_Config_ID"])
         selected_top_n = int(selected["Selected_Top_N"])
         selected_mode = str(selected["Selected_Portfolio_Mode"])
@@ -1969,6 +1993,10 @@ def simulate_walk_forward_dynamic_portfolio(
             "Trade_Date": trade_date.strftime("%Y-%m-%d"),
             "Strategy_Equity_After_Rebalance": strategy.equity,
             "Universe_Equity_After_Rebalance": universe.equity,
+            "Strategy_Price_Return_Before_Rebalance": strategy_price_return,
+            "Universe_Price_Return_Before_Rebalance": universe_price_return,
+            "QQQ_Price_Return_On_Rebalance": qqq_return,
+            "XLK_Price_Return_On_Rebalance": xlk_return,
             "Strategy_Holdings": int(len(strategy.weights)),
             "Universe_Holdings": int(len(universe.weights)),
             "Strategy_Cash_Weight": strategy.cash_weight,
@@ -2019,10 +2047,16 @@ def simulate_walk_forward_dynamic_portfolio(
             "Selected_Portfolio_Mode": selected_mode,
             "Date": trade_date.strftime("%Y-%m-%d"),
             "Rebalanced": True,
-            "Strategy_Daily_Return": -strategy_rebalance["Total_Cost"],
-            "Universe_Daily_Return": -universe_rebalance["Total_Cost"],
-            "QQQ_Daily_Return": 0.0,
-            "XLK_Daily_Return": 0.0,
+            "Strategy_Daily_Return": compound_price_return_and_cost(
+                strategy_price_return,
+                strategy_rebalance["Total_Cost"],
+            ),
+            "Universe_Daily_Return": compound_price_return_and_cost(
+                universe_price_return,
+                universe_rebalance["Total_Cost"],
+            ),
+            "QQQ_Daily_Return": qqq_return,
+            "XLK_Daily_Return": xlk_return,
             "Strategy_Equity": strategy.equity,
             "Universe_Equity": universe.equity,
             "QQQ_Equity": qqq_equity,
@@ -2035,7 +2069,6 @@ def simulate_walk_forward_dynamic_portfolio(
             "Universe_Total_Cost": universe_rebalance["Total_Cost"],
         })
 
-        current_pos = int(price_wide.index.get_loc(trade_date))
         if idx + 1 < len(live_schedule):
             next_trade_date_value = live_schedule[idx + 1][1]
             next_pos = int(price_wide.index.get_loc(next_trade_date_value))
@@ -2044,14 +2077,12 @@ def simulate_walk_forward_dynamic_portfolio(
 
         for pos in range(current_pos + 1, next_pos):
             date = price_wide.index[pos]
-            returns = (price_wide.iloc[pos] / price_wide.iloc[pos - 1] - 1.0).replace([np.inf, -np.inf], np.nan)
+            returns = price_return_row(price_wide, pos)
             strategy_return = daily_return_and_drift(strategy, returns)
             universe_return = daily_return_and_drift(universe, returns)
 
-            qqq_return = returns.get("QQQ", np.nan)
-            xlk_return = returns.get("XLK", np.nan)
-            qqq_return = float(qqq_return) if pd.notna(qqq_return) and np.isfinite(qqq_return) else 0.0
-            xlk_return = float(xlk_return) if pd.notna(xlk_return) and np.isfinite(xlk_return) else 0.0
+            qqq_return = finite_asset_return(returns, "QQQ")
+            xlk_return = finite_asset_return(returns, "XLK")
             qqq_equity *= 1.0 + qqq_return
             xlk_equity *= 1.0 + xlk_return
 
@@ -2240,6 +2271,15 @@ def simulate_variant(
     rebalance_rows: list[dict] = []
 
     for idx, (anchor, trade_date, day) in enumerate(performance_schedule):
+        current_pos = int(price_wide.index.get_loc(trade_date))
+        rebalance_returns = price_return_row(price_wide, current_pos) if daily_rows else pd.Series(dtype="float64")
+        strategy_price_return = daily_return_and_drift(strategy, rebalance_returns)
+        universe_price_return = daily_return_and_drift(universe, rebalance_returns)
+        qqq_return = finite_asset_return(rebalance_returns, "QQQ") if daily_rows else 0.0
+        xlk_return = finite_asset_return(rebalance_returns, "XLK") if daily_rows else 0.0
+        qqq_equity *= 1.0 + qqq_return
+        xlk_equity *= 1.0 + xlk_return
+
         ranked = day.sort_values("Tuned_Combined_Score", ascending=False).copy()
         strategy_target = build_target(
             ranked=ranked,
@@ -2276,6 +2316,10 @@ def simulate_variant(
             "Trade_Date": trade_date.strftime("%Y-%m-%d"),
             "Strategy_Equity_After_Rebalance": strategy.equity,
             "Universe_Equity_After_Rebalance": universe.equity,
+            "Strategy_Price_Return_Before_Rebalance": strategy_price_return,
+            "Universe_Price_Return_Before_Rebalance": universe_price_return,
+            "QQQ_Price_Return_On_Rebalance": qqq_return,
+            "XLK_Price_Return_On_Rebalance": xlk_return,
             "Strategy_Holdings": int(len(strategy.weights)),
             "Universe_Holdings": int(len(universe.weights)),
             "Strategy_Cash_Weight": strategy.cash_weight,
@@ -2313,10 +2357,16 @@ def simulate_variant(
             "Portfolio_Mode": mode,
             "Date": trade_date.strftime("%Y-%m-%d"),
             "Rebalanced": True,
-            "Strategy_Daily_Return": -strategy_rebalance["Total_Cost"],
-            "Universe_Daily_Return": -universe_rebalance["Total_Cost"],
-            "QQQ_Daily_Return": 0.0,
-            "XLK_Daily_Return": 0.0,
+            "Strategy_Daily_Return": compound_price_return_and_cost(
+                strategy_price_return,
+                strategy_rebalance["Total_Cost"],
+            ),
+            "Universe_Daily_Return": compound_price_return_and_cost(
+                universe_price_return,
+                universe_rebalance["Total_Cost"],
+            ),
+            "QQQ_Daily_Return": qqq_return,
+            "XLK_Daily_Return": xlk_return,
             "Strategy_Equity": strategy.equity,
             "Universe_Equity": universe.equity,
             "QQQ_Equity": qqq_equity,
@@ -2329,7 +2379,6 @@ def simulate_variant(
             "Universe_Total_Cost": universe_rebalance["Total_Cost"],
         })
 
-        current_pos = int(price_wide.index.get_loc(trade_date))
         if idx + 1 < len(performance_schedule):
             next_trade_date_value = performance_schedule[idx + 1][1]
             next_pos = int(price_wide.index.get_loc(next_trade_date_value))
@@ -2338,14 +2387,12 @@ def simulate_variant(
 
         for pos in range(current_pos + 1, next_pos):
             date = price_wide.index[pos]
-            returns = (price_wide.iloc[pos] / price_wide.iloc[pos - 1] - 1.0).replace([np.inf, -np.inf], np.nan)
+            returns = price_return_row(price_wide, pos)
             strategy_return = daily_return_and_drift(strategy, returns)
             universe_return = daily_return_and_drift(universe, returns)
 
-            qqq_return = returns.get("QQQ", np.nan)
-            xlk_return = returns.get("XLK", np.nan)
-            qqq_return = float(qqq_return) if pd.notna(qqq_return) and np.isfinite(qqq_return) else 0.0
-            xlk_return = float(xlk_return) if pd.notna(xlk_return) and np.isfinite(xlk_return) else 0.0
+            qqq_return = finite_asset_return(returns, "QQQ")
+            xlk_return = finite_asset_return(returns, "XLK")
             qqq_equity *= 1.0 + qqq_return
             xlk_equity *= 1.0 + xlk_return
 
